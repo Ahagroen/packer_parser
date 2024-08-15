@@ -1,0 +1,16 @@
+Using JSON to encode command strings, rather than XML
+
+Intention is to couple this with a generation tool to automatically generate the schema based on more easy to use systems (web UI)
+
+Need to declare a schema system first, then decode it
+
+First Bit is general, and points to a specific scheme. No effort is made to validate that byte, its assumed the byte correctly describes the right scheme.
+
+Each downlink type is its own scheme, and numbered from 2-255. 0 is reserved for the ping frame and 1 is the commandAck
+
+
+TODO = Select the right schema object based on flag bits/byte - Only one schema per file...
+TODO = Bit resolution for sub params
+TODO = Multiple Schema in one Schema file
+
+Is enum encoding actually required
