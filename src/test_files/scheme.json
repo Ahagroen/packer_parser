@@ -7,8 +7,7 @@
     "properties": {
         "obc_state":{
             "enum": ["Nominal","Safe"],
-            "description": "State of the OBC",
-            "enum_encoding":[1,0]
+            "description": "State of the OBC"
         },
         "obc_timestamp":{
             "type":"integer",

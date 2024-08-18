@@ -13,4 +13,9 @@ TODO = Select the right schema object based on flag bits/byte - Only one schema 
 TODO = Bit resolution for sub params
 TODO = Multiple Schema in one Schema file
 
-Is enum encoding actually required
+do any_of and then ref/or an enum to switch between refs?
+
+How small can I make it, and how do I make bindings?
+
+
+

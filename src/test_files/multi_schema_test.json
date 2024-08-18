@@ -1,45 +1,43 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id":"DownlinkSchema",
-    "properties": {
-        "Beacon 1":{
-            "$id": "Beacon1",
-            "type":"object",
-            "required": ["obc_state","obc_timestamp","current_stored_data","connected_to_ground"],
-            "properties": {
-                "obc_state":{
-                    "enum": ["Nominal","Safe"],
-                    "description": "State of the OBC",
-                    "enum_encoding":[1,0]
-                },
-                "obc_timestamp":{
-                    "type":"integer",
-                    "description": "Current UNIX timestamp",
-                    "minimum": 0,
-                    "maximum": 256
-                },
-                "current_stored_data":{
-                    "type":"string",
-                    "description": "Currently stored data piece"
-                },
-                "connected_to_ground":{
-                    "type":"boolean",
-                    "description": "If the satellite is connected"
-                }
-            }
-        },
-        "Command Ack":{
-            "type":"object",
-            "$id": "commandAck",
-            "required": [],
-            "properties": {
-                "received_command":{
-                    "type":"integer",
-                    "description": "Id number of the received command",
-                    "minimum": 0,
-                    "maximum": 256
-                }
+    "anyOf": [{
+        "id": "Beacon1",
+        "type":"object",
+        "required": ["obc_state","obc_timestamp","current_stored_data","connected_to_ground"],
+        "properties": {
+            "obc_state":{
+                "enum": ["Nominal","Safe"],
+                "description": "State of the OBC"
+            },
+            "obc_timestamp":{
+                "type":"integer",
+                "description": "Current UNIX timestamp",
+                "minimum": 0,
+                "maximum": 256
+            },
+            "current_stored_data":{
+                "type":"string",
+                "description": "Currently stored data piece"
+            },
+            "connected_to_ground":{
+                "type":"boolean",
+                "description": "If the satellite is connected"
             }
         }
-    }
+    },
+        
+    {
+        "type":"object",
+        "id": "commandAck",
+        "required": ["received_command"],
+        "properties": {
+            "received_command":{
+                "type":"integer",
+                "description": "Id number of the received command",
+                "minimum": 0,
+                "maximum": 256
+            }
+        }
+    }]
 }

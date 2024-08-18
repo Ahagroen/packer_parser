@@ -1,0 +1,8 @@
+{
+    "Beacon1":{
+        "obc_state":"Nominal",
+        "obc_timestamp":50,
+        "current_stored_data":"Test",
+        "connected_to_ground":true
+    }
+}
