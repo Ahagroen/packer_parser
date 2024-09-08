@@ -256,8 +256,22 @@ impl Parser{
             message
         } 
     }
-    pub fn get_schema(&self)->MultiLayerSchema{
-        self.schema.clone()
+    pub fn get_schema(&self,top_level_scheme:String)->MultiLayerSchema{
+        match &self.schema{
+            MultiLayerSchema::Layer { schemes, lookup } => {
+                schemes.get(lookup.get(&top_level_scheme).expect("Bad lookup")).expect("Couldn't find scheme").clone()
+            },
+            MultiLayerSchema::Bottom(_) => panic!("get_schema doesn't make sense in this context"),
+        }
+    }
+    pub fn get_top_level(&self)->Vec<String>{
+        match &self.schema{
+            MultiLayerSchema::Layer {lookup,.. } => {
+                let top_level:Vec<String> = lookup.keys().cloned().collect();
+                top_level
+            },
+            MultiLayerSchema::Bottom(x) => vec![x.get("id").unwrap().as_str().unwrap().to_string()],
+        }
     }
 }
 
