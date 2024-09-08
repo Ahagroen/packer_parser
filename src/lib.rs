@@ -1,6 +1,6 @@
 use core::panic;
 use std::{collections::VecDeque, str::from_utf8};
-use serde_json::{self, Value};
+use serde_json::{self, Map, Value};
 use bincode;
 
 
@@ -71,7 +71,7 @@ impl Parser{
             match current_config.get("enum"){
                 Some(x) => {
                     let data:Value =x.as_array().unwrap().into_iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").into();
-                    output = Self::to_bytes(&data,1)//need to validate no more than 1 byte worth of enum variants
+                    output = Self::to_bytes(&data,1)//need to validate no more than 1 byte worth of enum variants - or read the potential size of the enum
                     //Do I need encoding? Or can I just trust it remains in order?
                 },
                 None => {//not enum
@@ -205,11 +205,34 @@ impl Parser{
             None => Value::from(output),
         }
          //Need to convert back into JSON
-    }
-
-    
+    }    
 }
 
+#[derive(Clone)]
+struct Schema{
+    front_matter:Vec<String>,
+    main:Map<String,Value>
+}
+fn parse_schema(schema:Value,front_matter:Vec<String>)->Vec<Schema>{
+    //if value has oneOf -> not at bottom level. Parse each element recursively 
+    //if value does not have one Of -> at bottom level, return map
+    let starting_schema = schema.as_object().expect("Not an object");
+    match starting_schema.get("oneOf"){
+        Some(x) => {
+            let mut output:Vec<Schema> = vec![];
+            let subschemes = x.as_array().expect("Invalid formatting for oneOF");
+            for i in subschemes{
+                let mut front = front_matter.clone();
+                front.push(starting_schema.get("id").expect("Could not find ID").to_string());
+                output = [output,parse_schema(i.clone(), front)].concat();
+            }
+            output
+        },//Recursion
+        None => {
+            return vec![Schema{ front_matter, main: starting_schema.clone() }]
+        },//Found the bottom
+    }
+}
 
 #[cfg(test)]
 mod tests{
