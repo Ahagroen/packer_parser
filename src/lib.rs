@@ -7,14 +7,14 @@ pub struct Parser{
     schema:MultiLayerSchema
 }
 #[derive(Clone)]
-enum MultiLayerSchema{
+pub enum MultiLayerSchema{
     Layer{
         schemes: Box<HashMap<u8,MultiLayerSchema>>,
         lookup: HashMap<String,u8>,
     },
     Bottom(Map<String,Value>)
-
 }
+
 fn parse_multilayer_schema(schema:Value)->MultiLayerSchema{
     //if value has oneOf -> not at bottom level. Parse each element recursively 
     //if value does not have one Of -> at bottom level, return map
@@ -255,6 +255,9 @@ impl Parser{
         else{
             message
         } 
+    }
+    pub fn get_schema(&self)->MultiLayerSchema{
+        self.schema.clone()
     }
 }
 
