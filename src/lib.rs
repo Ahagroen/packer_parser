@@ -3,7 +3,6 @@ use std::{collections::{HashMap, VecDeque}, str::from_utf8};
 use serde_json::{self, Map, Value};
 use bincode;
 
-
 pub struct Parser{
     schema:MultiLayerSchema
 }
@@ -87,10 +86,12 @@ impl MessageConfig{
         }
     }
     fn order(properties:&Map<String,Value>)->Vec<Value>{
-        let keys:Vec<String> = properties.keys().cloned().collect();
-        println!("{:?}",keys);
-        let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array").clone();
-        return order
+        let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array");
+        if order.len() == 0{
+            panic!("Required field is empty: Must contain all relevent fields in the proper order.")
+        }
+
+        return order.clone()
     }
     fn scheme(properties:&Map<String,Value>)->Value{
         let scheme = properties.get("properties").expect("Could not find Properties field").clone();
