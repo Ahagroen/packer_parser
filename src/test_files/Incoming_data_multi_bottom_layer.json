@@ -1,0 +1,8 @@
+{
+    "EPS_response":{
+        "OBC_powerstate":{
+            "OBC_on":true,
+            "Radio_on":true
+        }
+    }
+}

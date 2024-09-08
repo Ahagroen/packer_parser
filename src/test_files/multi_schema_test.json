@@ -1,7 +1,7 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id":"DownlinkSchema",
-    "anyOf": [{
+    "oneOf": [{
         "id": "Beacon1",
         "type":"object",
         "required": ["obc_state","obc_timestamp","current_stored_data","connected_to_ground"],
@@ -39,5 +39,28 @@
                 "maximum": 256
             }
         }
-    }]
+    },
+    {
+        "id":"EPS_response",
+        "oneOf":[
+            {
+                "type":"object",
+                "id":"OBC_powerstate",
+                "required": ["OBC_on","Radio_on"],
+                "properties": {
+                    "OBC_on":{
+                        "type":"boolean",
+                        "description": "if the OBC is powered on"
+                    },
+                    "Radio_on":{
+                        "type":"boolean",
+                        "description": "If the radio is powered on"
+                    }
+                }
+            }
+        ]
+    }
+
+
+]
 }
