@@ -1,50 +1,91 @@
 use core::panic;
-use std::{collections::VecDeque, str::from_utf8};
+use std::{collections::{HashMap, VecDeque}, str::from_utf8};
 use serde_json::{self, Map, Value};
 use bincode;
 
 
 pub struct Parser{
-    scheme:Value
+    schema:MultiLayerSchema
 }
+#[derive(Clone)]
+enum MultiLayerSchema{
+    Layer{
+        schemes: Box<HashMap<u8,MultiLayerSchema>>,
+        lookup: HashMap<String,u8>,
+    },
+    Bottom(Map<String,Value>)
+
+}
+fn parse_multilayer_schema(schema:Value)->MultiLayerSchema{
+    //if value has oneOf -> not at bottom level. Parse each element recursively 
+    //if value does not have one Of -> at bottom level, return map
+    let starting_schema = schema.as_object().expect("Not an object");
+    match starting_schema.get("oneOf"){
+        Some(x) => {
+            let mut output:HashMap<u8,MultiLayerSchema>=Default::default();
+            let subschemes = x.as_array().expect("Invalid formatting for oneOF");
+            let mut counter:u8 = 0;
+            let mut lookup:HashMap<String,u8>=Default::default();
+            for i in subschemes{//is this order consistant
+
+                output.insert(counter,parse_multilayer_schema(i.clone()));
+                lookup.insert(starting_schema.get("id").expect("Could not find ID").to_string(),counter);
+                counter +=1;
+            }
+            MultiLayerSchema::Layer { schemes: Box::new(output), lookup }
+        },//Recursion
+        None => {
+            return MultiLayerSchema::Bottom(starting_schema.clone())
+        },//Found the bottom
+    }
+}
+fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits_carry:Vec<u8>)->(MultiLayerSchema,Value,Vec<u8>){
+    match scheme{
+        MultiLayerSchema::Layer { schemes, lookup } => {
+            if message.as_object().unwrap().keys().count() >1{
+                panic!("More than one top level schema defined in the message")
+            }
+            let signal =  message.as_object().unwrap().keys().next().expect("Couldn't find ID");
+            let scheme_id = lookup.get(signal).expect("id not recognized - String");
+            let sub_scheme = schemes.get(scheme_id).expect("id not recognized - usize");
+            message_bits_carry.push(*scheme_id);
+            return find_schema_encoding(sub_scheme, message.get(signal).unwrap(),message_bits_carry)//Should never panic, since 
+        },
+        MultiLayerSchema::Bottom(_) => {
+            return (scheme.clone(),message.clone(),message_bits_carry)
+        },
+    }
+}
+
 struct MessageConfig{
     order:Vec<Value>,
     scheme:Value,
 }
-impl Parser{
-    pub fn new(scheme: Value)->Parser{//need to come up with a way to feed in a string json
-        Parser {scheme}  
+impl MessageConfig{
+    fn new(schema:MultiLayerSchema)->MessageConfig{
+        match schema{
+            MultiLayerSchema::Layer {.. } => panic!("Didn't return a bottom level scheme"),
+            MultiLayerSchema::Bottom(x) => {
+                MessageConfig{ order: Self::order(&x), scheme: Self::scheme(&x) }
+            },
+        }
     }
-    fn order(properties:&Value)->Vec<Value>{
+    fn order(properties:&Map<String,Value>)->Vec<Value>{
         let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array").clone();
         return order
     }
-    fn encode_configs(&self,message:Value)->(MessageConfig,Value,Option<u8>){
-        //Given a multiScheme and String, return the correct sub-scheme, the remaining message and the correct signal bit
-        match self.scheme.get("anyOf"){
-            Some(x) => {//Multi-scheme
-                let data = message.as_object().unwrap();
-                if data.len() !=1{
-                    panic!("Message has more than one declared top-level schema")
-                } else {
-                    let req_schema = data.keys().next().expect("Could not get schema name");
-                    let message_value = data.get(req_schema).expect("could not access message");
-                    let signal_value = x.as_array().expect("anyOf list is not array")
-                    .into_iter().position(|x| x.as_object().expect("anyOf did not contain string args")
-                    .get("id").expect("No ID Field in Scheme").as_str().unwrap() == req_schema)
-                    .expect("Requested Schema not present in scheme doc");
-                    let schema = &x.as_array().unwrap()[signal_value];
-                    let msgconf = MessageConfig{ order: Self::order(schema), scheme: schema.get("properties").expect("Could not find Properties field").clone() };
-                    (msgconf,message_value.clone(),Some(signal_value as u8))
-                }
-            },//Scheme includes multiple possible message types - first byte used to encode this information
-            None => {
-                let confg = MessageConfig{ order: Self::order(&self.scheme), scheme: self.scheme.get("properties").expect("Could not find Properties field").clone() };
-                (confg,message,None) 
-            }
-            //Scheme does not include multiple possible message types - first byte is part of message
-        }
+    fn scheme(properties:&Map<String,Value>)->Value{
+        let scheme = properties.get("properties").expect("Could not find Properties field").clone();
+        return scheme
     }
+}
+impl Parser{
+    pub fn new(scheme: Value)->Parser{//need to come up with a way to feed in a string json
+        let schema = parse_multilayer_schema(scheme);
+        Parser {schema}  
+    }
+
+
     pub fn new_from_string(scheme:String)->Parser{
         let json:Value = serde_json::from_str(&scheme).expect("String is not valid JSON");
         Self::new(json)
@@ -58,15 +99,12 @@ impl Parser{
     pub fn encode(&self,message:Value)->Vec<u8>{//Should this be a string or a value? I don't think I want to expose serde_json, but I am not sure
         //Maybe should be encode_from_str and encode
         //Can assume this is correctly packed
-        let (message_configs,pre_processed_message,signal_bit) = self.encode_configs(message);
-        let mut processed_data = vec![];
-        match signal_bit{
-            Some(x) => processed_data.push(vec![x]),
-            None => (),
-        }
-        for i in &message_configs.order{
+        let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![]);
+        let message_config = MessageConfig::new(message_conf);
+        let mut processed_data =vec![signal_bit];
+        for i in &message_config.order{
             let unprocessed_data = pre_processed_message.get(i.as_str().unwrap()).unwrap();
-            let current_config = message_configs.scheme.get(i.as_str().unwrap()).unwrap().clone();
+            let current_config = message_config.scheme.get(i.as_str().unwrap()).unwrap().clone();
             let output:Vec<u8>;
             match current_config.get("enum"){
                 Some(x) => {
@@ -208,31 +246,7 @@ impl Parser{
     }    
 }
 
-#[derive(Clone)]
-struct Schema{
-    front_matter:Vec<String>,
-    main:Map<String,Value>
-}
-fn parse_schema(schema:Value,front_matter:Vec<String>)->Vec<Schema>{
-    //if value has oneOf -> not at bottom level. Parse each element recursively 
-    //if value does not have one Of -> at bottom level, return map
-    let starting_schema = schema.as_object().expect("Not an object");
-    match starting_schema.get("oneOf"){
-        Some(x) => {
-            let mut output:Vec<Schema> = vec![];
-            let subschemes = x.as_array().expect("Invalid formatting for oneOF");
-            for i in subschemes{
-                let mut front = front_matter.clone();
-                front.push(starting_schema.get("id").expect("Could not find ID").to_string());
-                output = [output,parse_schema(i.clone(), front)].concat();
-            }
-            output
-        },//Recursion
-        None => {
-            return vec![Schema{ front_matter, main: starting_schema.clone() }]
-        },//Found the bottom
-    }
-}
+
 
 #[cfg(test)]
 mod tests{
