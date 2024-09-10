@@ -258,10 +258,10 @@ impl Parser{
             message
         } 
     }
-    pub fn get_schema(&self,top_level_scheme:String)->MultiLayerSchema{
+    pub fn get_schema(&self,top_level_scheme:&String)->MultiLayerSchema{
         match &self.schema{
             MultiLayerSchema::Layer { schemes, lookup } => {
-                schemes.get(lookup.get(&top_level_scheme).expect("Bad lookup")).expect("Couldn't find scheme").clone()
+                schemes.get(lookup.get(top_level_scheme).expect("Bad lookup")).expect("Couldn't find scheme").clone()
             },
             MultiLayerSchema::Bottom(_) => panic!("get_schema doesn't make sense in this context"),
         }
