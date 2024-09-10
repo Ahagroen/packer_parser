@@ -59,8 +59,12 @@
                 }
             }
         ]
+    },
+    {
+        "type":"object",
+        "id": "Start_Pass",
+        "required": [],
+        "properties": {}
     }
-
-
 ]
 }

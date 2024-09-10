@@ -44,6 +44,7 @@ fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits
                 panic!("More than one top level schema defined in the message")
             }
             let signal =  message.as_object().unwrap().keys().next().expect("Couldn't find ID");
+            println!("{:?}",signal);
             let scheme_id = lookup.get(signal).expect("id not recognized - String");
             let sub_scheme = schemes.get(scheme_id).expect("id not recognized - usize");
             message_bits_carry.push(*scheme_id);
@@ -88,6 +89,9 @@ impl MessageConfig{
     fn order(properties:&Map<String,Value>)->Vec<Value>{
         let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array");
         if order.len() == 0{
+            if properties.get("properties").expect("could not find the properties field").as_object().unwrap().is_empty(){
+                return Vec::new()
+            }
             panic!("Required field is empty: Must contain all relevent fields in the proper order.")
         }
 
@@ -120,10 +124,8 @@ impl Parser{
         //Can assume this is correctly packed
         let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![]);
         let message_config = MessageConfig::new(message_conf);
-        println!("{:?}",signal_bit);
         let mut processed_data =vec![signal_bit];
         for i in &message_config.order{
-            println!("preproceesed:{:?}",pre_processed_message);
             let unprocessed_data = pre_processed_message.get(i.as_str().unwrap()).unwrap();
             let current_config = message_config.scheme.get(i.as_str().unwrap()).unwrap().clone();
             let output:Vec<u8>;
@@ -368,6 +370,22 @@ mod tests{
         let message = [2,0,1,1];
         let decoded_message = parser.decode(message.to_vec());
         let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_multi_bottom_layer.json").expect("Could not read incoming data file")).unwrap();
+        assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
+    }
+    #[test]
+    fn test_multi_schema_encode_singleton(){
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let message = fs::read_to_string(r"src/test_files/Incoming_data_singleton.json").expect("Could not read incoming data file");
+        let encoded_message = parser.encode_from_string(&message);
+        let expected_message = [3];
+        assert_eq!(encoded_message,expected_message)
+    }
+    #[test]
+    fn test_multi_schema_decode_singleton(){
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let message = [3];
+        let decoded_message = parser.decode(message.to_vec());
+        let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_singleton.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
     }
 }

@@ -17,3 +17,4 @@ How small can I make it, and how do I make bindings?
 
 
 
+For singleton commands -> Commands that take 0 bytes of arguments and are simply sent as is. Define them as you would any other command frame except with an empty required array and empty parameters field. This is decoded as an empty map with 1 keys and 0 values
