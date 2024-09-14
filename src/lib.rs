@@ -44,7 +44,6 @@ fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits
                 panic!("More than one top level schema defined in the message")
             }
             let signal =  message.as_object().unwrap().keys().next().expect("Couldn't find ID");
-            println!("{:?}",signal);
             let scheme_id = lookup.get(signal).expect("id not recognized - String");
             let sub_scheme = schemes.get(scheme_id).expect("id not recognized - usize");
             message_bits_carry.push(*scheme_id);
