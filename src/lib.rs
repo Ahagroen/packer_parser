@@ -147,7 +147,12 @@ impl Parser{
                                 panic!("Length must be at least one byte (atm)")
                             }
                             //assume its always signed for now
-                            output = Self::to_bytes(unprocessed_data, len as usize/256);
+                            let pre_processed:i64;
+                            match unprocessed_data{
+                                Value::String(x)=>pre_processed = x.parse().unwrap(),
+                                _=>panic!("Should never occur")
+                            }
+                            output = Self::to_bytes(&Value::Number(pre_processed.into()), len as usize/256);
                         },
                         "string" => output = Self::to_bytes(unprocessed_data, 0),//0 means don't handle length and remain little_endian so the length is first
                         "number" => output = Self::to_bytes(unprocessed_data,8),//handle signed bits here too!
@@ -164,12 +169,15 @@ impl Parser{
     processed_data.into_iter().flatten().collect()//still need to add pre-append bits
     }
     fn to_bytes(preprocessed_data: &serde_json::Value,len:usize) -> Vec<u8> {
+        let starting:Vec<u8>;
         match preprocessed_data{
             serde_json::Value::Null => panic!("Cannot have a null field value"), //Implies bad frame decode
             serde_json::Value::Object(_) => todo!(),
-            _=>{}
+            serde_json::Value::Number(x)=> starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
+            serde_json::Value::String(x)=> starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
+            serde_json::Value::Bool(x) => starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
+            serde_json::Value::Array(_)=>todo!(),
         }
-        let starting = bincode::serialize(preprocessed_data).expect("Couldn't convert to bytes");
         if len ==0{
             let length = starting[0];
             let mut carry = starting;
