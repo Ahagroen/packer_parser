@@ -145,6 +145,16 @@ impl Parser{
                             let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
                             //assume its always signed for now
                             let current_data  = unprocessed_data.as_i64().expect("Provided value is not an integer");
+                            if current_data < 0{
+                                if 2_i64.pow(len-1)<current_data{
+                                    panic!("Provided value is bigger than allowed in schema")
+                                }
+                            } else {
+                                if 2_i64.pow(len)<current_data{
+                                    panic!("Provided value is bigger than allowed in schema")
+                                }
+                            }
+                                //Then its signed
                             output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
                             println!("int {:?}",output);
                         },
@@ -156,14 +166,14 @@ impl Parser{
                             }
                             output = vec![length as u8];
                             output.append(&mut processed_data);
-                        },//0 means don't handle length and remain little_endian so the length is first
+                        },
                         "number" => {
-                            let len:u32 = current_config.get("size").expect("Number fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
-                            //assume its always signed for now
-                            let current_data  = unprocessed_data.as_f64().expect("Provided value is not an integer");//need to handle sizing here
-                            output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();//sign bits?
+                            //Always a 32byte signed float
+                            let current_data:f64  = unprocessed_data.as_f64().expect("Provided value is not an integer");
+                            //need to handle sizing here
+                            output = current_data.to_le_bytes().to_vec();
                             println!("{:?}",output);
-                        },//handle signed bits here too!
+                        },
                         "base64" => {
                             let mut processed_data = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
                             let length = processed_data.len();
