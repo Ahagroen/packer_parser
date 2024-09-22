@@ -1,16 +1,29 @@
+#![warn(missing_docs)]
+//! # Packer-Parser (Name Pending)
+//! Encoding and Decoding library for JSONschema based satellite communications schemas
+//! Capable of encoding and decoding, with a bidirectional schema (such that the same schema file can be used to both encode and decode messages)
+//! 
+//! The Aim of this project is to provide a satellite communication standard that is modern and easier to write and develop from than XML based systems. More can be read (here)[] 
+
 use core::panic;
 use std::{collections::{HashMap, VecDeque}, str::from_utf8};
 use serde_json::{self, Map, Number, Value};
 
+/// Main interface of the library, created from JSONSchema files
 pub struct Parser{
     schema:MultiLayerSchema
 }
+///Schema representation within the parser. . Bottom layers are the actual subschemas to transmit
 #[derive(Clone)]
 pub enum MultiLayerSchema{
+    ///Layers are the top level schema objects that contain some amount of subschemas
     Layer{
+        ///The subschema options from this point. u8 keys are also used as signal bytes for the encoded message
         schemes: Box<HashMap<u8,MultiLayerSchema>>,
+        ///The lookup map to map string layer names to u8 keys in the schemes map
         lookup: HashMap<String,u8>,
     },
+    ///Final Schema for transmission 
     Bottom(Map<String,Value>)
 }
 
@@ -101,24 +114,25 @@ impl MessageConfig{
     }
 }
 impl Parser{
-    pub fn new(scheme: Value)->Parser{//need to come up with a way to feed in a string json
+    ///Creates a new parser from a serde_json value  
+    pub fn new(scheme: Value)->Parser{
         let schema = parse_multilayer_schema(scheme);
         Parser {schema}  
     }
 
-
+    ///Creates a new parser from a String schema
     pub fn new_from_string(scheme:String)->Parser{
         let json:Value = serde_json::from_str(&scheme).expect("String is not valid JSON");
         Self::new(json)
     }
 
-
-    pub fn encode_from_string(&self,message:&String)->Vec<u8>{
+    ///Encode a given JSON message into vec[u8]
+    pub fn encode_from_string(&self,message:&str)->Vec<u8>{
         let data:serde_json::Value = serde_json::from_str(message).expect("Could not deserialize message, is it valid JSON?");//Will be validated upstream, temp warning
         self.encode(data)
     }
-    pub fn encode(&self,message:Value)->Vec<u8>{//Should this be a string or a value? I don't think I want to expose serde_json, but I am not sure
-        //Maybe should be encode_from_str and encode
+    ///Encode a given JSON message into vec[u8]
+    pub fn encode(&self,message:Value)->Vec<u8>{
         //Can assume this is correctly packed
         let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![]);
         let message_config = MessageConfig::new(message_conf);
@@ -130,8 +144,7 @@ impl Parser{
             match current_config.get("enum"){
                 Some(x) => {
                     let data:u8 =x.as_array().unwrap().into_iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").try_into().expect("More than 256 enum options");
-                    output = data.to_le_bytes().to_vec();//need to validate no more than 1 byte worth of enum variants - or read the potential size of the enum
-                    //Do I need encoding? Or can I just trust it remains in order?
+                    output = data.to_le_bytes().to_vec();
                 },
                 None => {//not enum
                     match current_config.get("type").unwrap().as_str().unwrap(){
@@ -142,8 +155,7 @@ impl Parser{
                             }
                         },
                         "integer" => {
-                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
-                            //assume its always signed for now
+                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bits
                             let current_data  = unprocessed_data.as_i64().expect("Provided value is not an integer");
                             if current_data < 0{
                                 if 2_i64.pow(len-1)<current_data{
@@ -159,33 +171,29 @@ impl Parser{
                             println!("int {:?}",output);
                         },
                         "string" => {
-                            let mut processed_data = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
-                            let length = processed_data.len();
+                            let mut carry = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let length = carry.len();
                             if length > 256{
                                 panic!("String is more than 256 bytes long")
                             }
                             output = vec![length as u8];
-                            output.append(&mut processed_data);
+                            output.append(&mut carry);
                         },
                         "number" => {
-                            //Always a 32byte signed float
+                            //Always a 64byte signed float
                             let current_data:f64  = unprocessed_data.as_f64().expect("Provided value is not an integer");
-                            //need to handle sizing here
                             output = current_data.to_le_bytes().to_vec();
                             println!("{:?}",output);
                         },
                         "base64" => {
-                            let mut processed_data = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
-                            let length = processed_data.len();
+                            let mut carry = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let length = carry.len();
                             if length > 256{
                                 panic!("String is more than 256 bytes long")
                             }
                             output = vec![length as u8];
-                            output.append(&mut processed_data);
-                        },//Do I want determined_length strings?
-                        // "object" => {
-                        //     ()
-                        // }
+                            output.append(&mut carry);
+                        },
                         _ => panic!("Cannot parse")
                     }
                 },
@@ -194,10 +202,12 @@ impl Parser{
         }
     processed_data.into_iter().flatten().collect()//still need to add pre-append bits
     }
+    ///Decode vec[u8] to a string (Formatted as JSON)
     pub fn decode_to_string(&self,message:Vec<u8>)->String{
         let data = self.decode(message);
         return serde_json::to_string(&data).unwrap();
     }
+    ///Decode vec[u8] to a serde_json::value Object
     pub fn decode(&self,message: Vec<u8>,)->Value{
         let mut working_message:VecDeque<u8> = message.into();
         let mut output = serde_json::Map::new();
@@ -231,12 +241,8 @@ impl Parser{
                             output.insert(i.as_str().unwrap().to_string(),Value::Number(working_output.into()));
                         },
                         "number" => {
-                            let len:u32 = current_config.get("size").expect("Number fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
-                            let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
-                            data.reverse();//is this needed
-                            while data.len() <8{
-                                data.push(0)
-                            }//This doesn't work for floats though
+                            //always f64
+                            let data:Vec<u8> = working_message.drain(0..8).collect();
                             let working_output:f64 = f64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
                             output.insert(i.as_str().unwrap().to_string(),Value::Number(Number::from_f64(working_output).expect("Couldn't convert to JSON")));
                         },
@@ -252,7 +258,6 @@ impl Parser{
             }
         }
         Value::from(Self::create_output_package(output,&mut signal_values))
-         //Need to convert back into JSON
     }    
     fn create_output_package(message:Map<String,Value>,frontmatter:&mut VecDeque<String>)->Map<String, Value>{
         if frontmatter.len() > 0{
@@ -265,6 +270,7 @@ impl Parser{
             message
         } 
     }
+    ///Returns a lower level sub scheme as a [MultiLayerSchema] given the top level schema
     pub fn get_schema(&self,top_level_scheme:&String)->MultiLayerSchema{
         match &self.schema{
             MultiLayerSchema::Layer { schemes, lookup } => {
@@ -273,6 +279,7 @@ impl Parser{
             MultiLayerSchema::Bottom(_) => panic!("get_schema doesn't make sense in this context"),
         }
     }
+    ///Returns all top level schema identifiers
     pub fn get_top_level(&self)->Vec<String>{
         match &self.schema{
             MultiLayerSchema::Layer {lookup,.. } => {
