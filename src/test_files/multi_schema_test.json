@@ -13,8 +13,7 @@
             "obc_timestamp":{
                 "type":"integer",
                 "description": "Current UNIX timestamp",
-                "minimum": 0,
-                "maximum": 256
+                "size": 8
             },
             "current_stored_data":{
                 "type":"string",
@@ -35,8 +34,7 @@
             "received_command":{
                 "type":"integer",
                 "description": "Id number of the received command",
-                "minimum": 0,
-                "maximum": 256
+                "size": 8
             }
         }
     },

@@ -1,7 +1,6 @@
 use core::panic;
 use std::{collections::{HashMap, VecDeque}, str::from_utf8};
-use serde_json::{self, Map, Value};
-use bincode;
+use serde_json::{self, Map, Number, Value};
 
 pub struct Parser{
     schema:MultiLayerSchema
@@ -127,36 +126,53 @@ impl Parser{
         for i in &message_config.order{
             let unprocessed_data = pre_processed_message.get(i.as_str().unwrap()).unwrap();
             let current_config = message_config.scheme.get(i.as_str().unwrap()).unwrap().clone();
-            let output:Vec<u8>;
+            let mut output:Vec<u8>;
             match current_config.get("enum"){
                 Some(x) => {
-                    let data:Value =x.as_array().unwrap().into_iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").into();
-                    output = Self::to_bytes(&data,1)//need to validate no more than 1 byte worth of enum variants - or read the potential size of the enum
+                    let data:u8 =x.as_array().unwrap().into_iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").try_into().expect("More than 256 enum options");
+                    output = data.to_le_bytes().to_vec();//need to validate no more than 1 byte worth of enum variants - or read the potential size of the enum
                     //Do I need encoding? Or can I just trust it remains in order?
                 },
                 None => {//not enum
                     match current_config.get("type").unwrap().as_str().unwrap(){
                         "boolean" => {
-                            output = Self::to_bytes(unprocessed_data, 1);
+                            match unprocessed_data.as_bool().unwrap(){
+                                true => output = vec![1],
+                                false => output = vec![0],
+                            }
                         },
                         "integer" => {
-                            let len = current_config.get("maximum").expect("Number fields must have a declared maximum").as_u64().expect("Maximum Must be a number");
-                            if len%256 != 0{
-                                panic!("Maximum must be a multiple of 8");
-                            } else if len < 256{
-                                panic!("Length must be at least one byte (atm)")
-                            }
+                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
                             //assume its always signed for now
-                            let pre_processed:i64;
-                            match unprocessed_data{
-                                Value::String(x)=>pre_processed = x.parse().unwrap(),
-                                _=>panic!("Should never occur")
-                            }
-                            output = Self::to_bytes(&Value::Number(pre_processed.into()), len as usize/256);
+                            let current_data  = unprocessed_data.as_i64().expect("Provided value is not an integer");
+                            output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
+                            println!("int {:?}",output);
                         },
-                        "string" => output = Self::to_bytes(unprocessed_data, 0),//0 means don't handle length and remain little_endian so the length is first
-                        "number" => output = Self::to_bytes(unprocessed_data,8),//handle signed bits here too!
-                        "base64" => output = Self::to_bytes(unprocessed_data, 0),//Do I want determined_length strings?
+                        "string" => {
+                            let mut processed_data = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let length = processed_data.len();
+                            if length > 256{
+                                panic!("String is more than 256 bytes long")
+                            }
+                            output = vec![length as u8];
+                            output.append(&mut processed_data);
+                        },//0 means don't handle length and remain little_endian so the length is first
+                        "number" => {
+                            let len:u32 = current_config.get("size").expect("Number fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
+                            //assume its always signed for now
+                            let current_data  = unprocessed_data.as_f64().expect("Provided value is not an integer");//need to handle sizing here
+                            output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();//sign bits?
+                            println!("{:?}",output);
+                        },//handle signed bits here too!
+                        "base64" => {
+                            let mut processed_data = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let length = processed_data.len();
+                            if length > 256{
+                                panic!("String is more than 256 bytes long")
+                            }
+                            output = vec![length as u8];
+                            output.append(&mut processed_data);
+                        },//Do I want determined_length strings?
                         // "object" => {
                         //     ()
                         // }
@@ -168,32 +184,6 @@ impl Parser{
         }
     processed_data.into_iter().flatten().collect()//still need to add pre-append bits
     }
-    fn to_bytes(preprocessed_data: &serde_json::Value,len:usize) -> Vec<u8> {
-        let starting:Vec<u8>;
-        match preprocessed_data{
-            serde_json::Value::Null => panic!("Cannot have a null field value"), //Implies bad frame decode
-            serde_json::Value::Object(_) => todo!(),
-            serde_json::Value::Number(x)=> starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
-            serde_json::Value::String(x)=> starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
-            serde_json::Value::Bool(x) => starting= bincode::serialize(x).expect("Couldn't convert to bytes"),
-            serde_json::Value::Array(_)=>todo!(),
-        }
-        if len ==0{
-            let length = starting[0];
-            let mut carry = starting;
-            carry.reverse();
-            let mut output:Vec<u8> = carry.into_iter().take(length as usize).collect();
-            output.push(length);
-            output.reverse();
-            return output
-        } else {
-            let mut carry:Vec<u8> = starting.into_iter().take(len).collect();
-            carry.reverse();
-            return carry
-        }
-    }
-
-
     pub fn decode_to_string(&self,message:Vec<u8>)->String{
         let data = self.decode(message);
         return serde_json::to_string(&data).unwrap();
@@ -221,24 +211,24 @@ impl Parser{
                             }
                         },
                         "integer" => {
-                            let len = current_config.get("maximum").expect("Number fields must have a declared maximum").as_u64().expect("Maximum Must be a number");
-                            if len%256 != 0{
-                                panic!("Maximum must be a multiple of 8");
-                            } else if len < 256{
-                                panic!("Length must be at least one byte (atm)")
-                            }
-                            let mut data:Vec<u8> = working_message.drain(0..len as usize/256).collect();
-                            data.reverse();
+                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
+                            let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
+                            data.reverse();//is this needed
                             while data.len() <8{
                                 data.push(0)
                             }
-                            let working_output:u64 = bincode::deserialize(&data).unwrap();
+                            let working_output:u64 = u64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
                             output.insert(i.as_str().unwrap().to_string(),Value::Number(working_output.into()));
                         },
                         "number" => {
-                            let data:Vec<u8> = working_message.drain(0..8).collect();
-                            let working_output:u64 = bincode::deserialize(&data).unwrap();
-                            output.insert(i.as_str().unwrap().to_string(),Value::Number(working_output.into()));
+                            let len:u32 = current_config.get("size").expect("Number fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
+                            let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
+                            data.reverse();//is this needed
+                            while data.len() <8{
+                                data.push(0)
+                            }//This doesn't work for floats though
+                            let working_output:f64 = f64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
+                            output.insert(i.as_str().unwrap().to_string(),Value::Number(Number::from_f64(working_output).expect("Couldn't convert to JSON")));
                         },
                         "string" => {
                             let length  = working_message.pop_front().unwrap();

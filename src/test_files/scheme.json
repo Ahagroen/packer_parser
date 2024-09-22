@@ -11,9 +11,8 @@
         },
         "obc_timestamp":{
             "type":"integer",
-            "description": "Current UNIX timestamp",
-            "minimum": 0,
-            "maximum": 256
+            "description": "Current UNIX timestamp",         
+            "size": 8
         },
         "current_stored_data":{
             "type":"string",
