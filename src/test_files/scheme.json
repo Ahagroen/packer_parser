@@ -1,6 +1,6 @@
 {
-    "$id": "#DownlinkSchema",
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "id": "DownlinkSchema",
+    "version":1,
     "title": "TestScheme",
     "description": "Downlink Scheme, first revision",
     "type":"object",
@@ -23,6 +23,6 @@
             "description": "If the satellite is connected"
         }
     },
-    "$comment": "The order of data in required corresponds to the encoding/decoding order in the frame. To position a specific value, place it in that position in the following array. All fields must be marked required - this file is probably going to be generated from toml or smthn so I can do addition formatting here (for a u8, provide a sufficient maximum etc)",
+    "comment": "The order of data in required corresponds to the encoding/decoding order in the frame. To position a specific value, place it in that position in the following array. All fields must be marked required - this file is probably going to be generated from toml or smthn so I can do addition formatting here (for a u8, provide a sufficient maximum etc)",
     "required": ["obc_state","obc_timestamp","current_stored_data","connected_to_ground"]
 }

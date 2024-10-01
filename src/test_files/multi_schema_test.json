@@ -1,5 +1,6 @@
 {
-    "$id":"DownlinkSchema",
+    "id":"DownlinkSchema",
+    "version":1,
     "oneOf": [{
         "id": "Beacon1",
         "type":"object",

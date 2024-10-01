@@ -30,31 +30,50 @@ pub enum MultiLayerSchema{
 #[derive(Debug)]
 pub enum Error{
     ///Error when parsing a schema file
-    ParseError,
+    ParseError(String),
     ///Error when encoding or decoding data, string param is the keyword where the error occured
-    EncodeError(String),
+    EncodeError{
+        ///Description of Error
+        error_msg:String,
+        ///Keyword where error occured
+        error_pos:Option<String>,
+    },
 }
 
 impl fmt::Display for Error{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self{
-            Error::ParseError => write!(f,"Error when parsing file"),
-            Error::EncodeError(point) => write!(f,"Error when parsing {}", point.to_string()),
+            Error::ParseError(reason) => write!(f,"Error when parsing file: {}",reason.to_string()),
+            Error::EncodeError { error_msg, error_pos } => write!(f,"Error when processing message at keyword {}: {}",error_pos.clone().unwrap_or("N/A".to_string()).to_string(),error_msg.to_string()),
+            
         }
     }
 }
 fn parse_multilayer_schema(schema:Value)->Result<MultiLayerSchema,Error>{
     //if value has oneOf -> not at bottom level. Parse each element recursively 
     //if value does not have one Of -> at bottom level, return map
-    let starting_schema = schema.as_object().expect("Not an object");
+    let starting_schema: &Map<String, Value>;
+    match schema.as_object(){
+        Some(schema) => starting_schema = schema,
+        None => return Err(Error::ParseError("Provided Schema is not a valid Key-Value Map".to_string())),
+    }
     match starting_schema.get("oneOf"){
         Some(x) => {
             let mut output:HashMap<u8,MultiLayerSchema>=Default::default();
-            let subschemes = x.as_array().expect("Invalid formatting for oneOF");
+            let subschemes: &Vec<Value>;
+            match x.as_array(){
+                Some(data) => subschemes = data,
+                None => return Err(Error::ParseError("oneOf is incorrectly declared, unable to parse array".to_string())),
+            }
             let mut lookup:HashMap<String,u8>=Default::default();
             for (counter, i) in (0_u8..).zip(subschemes.iter()){//is this order consistant
                 output.insert(counter,parse_multilayer_schema(i.clone())?);
-                lookup.insert(i.get("id").expect("Could not find ID").as_str().unwrap().to_string(),counter);
+                let key: String;
+                match i.get("id"){
+                    Some(key_val) => key = key_val.as_str().expect("Will never panic, loaded as a string").to_string(),
+                    None => return Err(Error::ParseError("Could not find subschema with given key".to_string())),
+                }
+                lookup.insert(key,counter);
             }
             Ok(MultiLayerSchema::Layer { schemes: Box::new(output), lookup })
         },//Recursion
@@ -67,23 +86,23 @@ fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits
     match scheme{
         MultiLayerSchema::Layer { schemes, lookup } => {
             if message.as_object().unwrap().keys().count() >1{
-                return Err(Error::ParseError)
+                return Err(Error::ParseError("Message has more than one signal key".to_string()))
             }
             let signal:&String;
             match message.as_object().unwrap().keys().next(){
                 Some(flag) => signal=flag,
-                None => return Err(Error::ParseError),
+                None => return Err(Error::ParseError("Message doesn't have a signal key".to_string())),
             }
             let scheme_id:&u8;
             match lookup.get(signal){
                 Some(id) => scheme_id=id,
-                None => return Err(Error::EncodeError(signal.to_string())),
+                None => return Err(Error::EncodeError{error_msg: "Unable to get scheme id".to_string(),error_pos: Some(signal.to_string())}),
             }
             match schemes.get(scheme_id){
                 Some(id) => {message_bits_carry.push(*scheme_id);
                     find_schema_encoding(id, message.get(signal).unwrap(),message_bits_carry)
                 },
-                None => return Err(Error::EncodeError(signal.to_string())),
+                None => return Err(Error::EncodeError{error_msg: "Unable to get scheme from scheme id".to_string(),error_pos: Some(signal.to_string())}),
             }
             //Should never panic, since 
         },
@@ -92,11 +111,19 @@ fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits
         },
     }
 }
-fn find_schema_decoding(scheme:&MultiLayerSchema,message:&mut VecDeque<u8>,mut message_values_carry:VecDeque<String>)->(MultiLayerSchema,VecDeque<u8>,VecDeque<String>){
+fn find_schema_decoding(scheme:&MultiLayerSchema,message:&mut VecDeque<u8>,mut message_values_carry:VecDeque<String>)->Result<(MultiLayerSchema,VecDeque<u8>,VecDeque<String>),Error>{
     match scheme{
         MultiLayerSchema::Layer { schemes, lookup } => {
-            let signal =  message.pop_front().expect("Message was empty!");
-            let sub_scheme = schemes.get(&signal).expect("id not recognized - usize");
+            let signal: u8;
+            match message.pop_front(){
+                Some(signal_data) => signal = signal_data,
+                None => return Err(Error::EncodeError { error_msg: "Message is empty".to_string(), error_pos: None }),
+            }
+            let sub_scheme: &MultiLayerSchema;
+            match schemes.get(&signal){
+                Some(data) => sub_scheme = data,
+                None => return Err(Error::EncodeError { error_msg: "Provided Message Bit couldn't be found".to_string(), error_pos: Some(signal.to_string()) }),
+            }
             for (key,value) in lookup.iter(){
                 if *value == signal{
                     message_values_carry.push_back(key.clone())
@@ -105,7 +132,7 @@ fn find_schema_decoding(scheme:&MultiLayerSchema,message:&mut VecDeque<u8>,mut m
             find_schema_decoding(sub_scheme, message,message_values_carry)
         },
         MultiLayerSchema::Bottom(_) => {
-            (scheme.clone(),message.clone(),message_values_carry)
+            Ok((scheme.clone(),message.clone(),message_values_carry))
         },
     }
 }
@@ -115,28 +142,72 @@ struct MessageConfig{
     scheme:Value,
 }
 impl MessageConfig{
-    fn new(schema:MultiLayerSchema)->MessageConfig{
+    fn new(schema:MultiLayerSchema)->Result<MessageConfig,Error>{
         match schema{
-            MultiLayerSchema::Layer {.. } => panic!("Didn't return a bottom level scheme"),
+            MultiLayerSchema::Layer {.. } => panic!("Didn't return a bottom level scheme"),//Should never happen (Errors are caught before this point)
             MultiLayerSchema::Bottom(x) => {
-                MessageConfig{ order: Self::order(&x), scheme: Self::scheme(&x) }
+                Ok(MessageConfig{ order: Self::order(&x)?, scheme: Self::scheme(&x)? })
             },
         }
     }
-    fn order(properties:&Map<String,Value>)->Vec<Value>{
-        let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array");
+    fn order(properties:&Map<String,Value>)->Result<Vec<Value>,Error>{//TODO
+        let id;
+        match properties.get("id"){
+            Some(data) => {
+                match data.as_str(){
+                    Some(data2) => id=data2,
+                    None => return Err(Error::ParseError("One of the ID values is not a string".to_string())),
+                }
+            },
+            None => return Err(Error::ParseError("Missing an ID value".to_string())),
+        }
+        let order: &Vec<Value>;
+        match properties.get("required"){
+            Some(data) => {
+                match data.as_array(){
+                    Some(data2) => order=data2,
+                    None => return Err(Error::EncodeError{error_msg:"Required Field must be an array".to_string(),error_pos:Some(id.to_string())}),
+                }
+            },
+            None => return Err(Error::EncodeError{error_msg:"Missing Required Field".to_string(),error_pos:Some(id.to_string())}),
+        }
         if order.is_empty(){
-            if properties.get("properties").expect("could not find the properties field").as_object().unwrap().is_empty(){
-                return Vec::new()
+            match properties.get("properties"){
+                Some(data) => {
+                    match data.as_object(){
+                        Some(data2) => {
+                            if data2.is_empty(){
+                                return Ok(Vec::new())
+                            } else {
+                                return Err(Error::EncodeError{error_msg:"Required Field is empty!".to_string(),error_pos:Some(id.to_string())})
+                            }
+                        },
+                        None => return Err(Error::EncodeError{error_msg:"Properties Field is incorrectly formatted".to_string(),error_pos:Some(id.to_string())}),
+                    }
+                },
+                None => return Err(Error::EncodeError{error_msg:"Missing properties Field".to_string(),error_pos:Some(id.to_string())}),
             }
-            panic!("Required field is empty: Must contain all relevent fields in the proper order.")
         }
 
-        order.clone()
+        Ok(order.clone())
     }
-    fn scheme(properties:&Map<String,Value>)->Value{
-        let scheme = properties.get("properties").expect("Could not find Properties field").clone();
-        scheme
+    fn scheme(properties:&Map<String,Value>)->Result<Value,Error>{
+        let id;
+        match properties.get("id"){
+            Some(data) => {
+                match data.as_str(){
+                    Some(data2) => id=data2,
+                    None => return Err(Error::ParseError("One of the ID values is not a string".to_string())),
+                }
+            },
+            None => return Err(Error::ParseError("Missing an ID value".to_string())),
+        }
+        let scheme: Value;
+        match properties.get("properties"){
+            Some(data) => scheme = data.clone(),
+            None => return Err(Error::EncodeError{error_msg:"Missing properties Field".to_string(),error_pos:Some(id.to_string())}),
+        }
+        Ok(scheme)
     }
 }
 impl Parser{
@@ -151,7 +222,7 @@ impl Parser{
         let data: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&scheme);
         match data{
             Ok(value) => Self::new(value),
-            Err(_) => Err(Error::ParseError),
+            Err(_) => Err(Error::ParseError("Schema could not be serialized into key-value map".to_string())),
         }
     }
 
@@ -160,17 +231,17 @@ impl Parser{
         let data: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(message);
         match data{
             Ok(value) => self.encode(value),
-            Err(_) => Err(Error::ParseError),
+            Err(_) => Err(Error::ParseError("String could not be serialized into key-value map".to_string())),
         }
     }
     ///Encode a given JSON message into vec[u8]
     pub fn encode(&self,message:Value)->Result<Vec<u8>,Error>{
         //Can assume this is correctly packed
         let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![])?;
-        let message_config = MessageConfig::new(message_conf);
+        let message_config = MessageConfig::new(message_conf)?;
         let mut processed_data =vec![signal_bit];
         for i in &message_config.order{
-            let unprocessed_data = pre_processed_message.get(i.as_str().unwrap()).unwrap();
+            let unprocessed_data = pre_processed_message.get(i.as_str().unwrap()).unwrap();//Can this fail?
             let current_config = message_config.scheme.get(i.as_str().unwrap()).unwrap().clone();
             let mut output:Vec<u8>;
             match current_config.get("enum"){
@@ -241,8 +312,8 @@ impl Parser{
     pub fn decode(&self,message: Vec<u8>,)->Result<Value,Error>{
         let mut working_message:VecDeque<u8> = message.into();
         let mut output = serde_json::Map::new();
-        let (message_conf,mut working_message,mut signal_values) = find_schema_decoding(&self.schema,&mut working_message,vec![].into());
-        let message_configs = MessageConfig::new(message_conf);
+        let (message_conf,mut working_message,mut signal_values) = find_schema_decoding(&self.schema,&mut working_message,vec![].into())?;
+        let message_configs = MessageConfig::new(message_conf)?;
         for i in message_configs.order{
             let current_config = message_configs.scheme.get(i.as_str().unwrap()).unwrap().clone();
             match current_config.get("enum"){

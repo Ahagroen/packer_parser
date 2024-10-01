@@ -1,7 +1,7 @@
 # Basic Schema Definition
 The definition of schema files is designed to match the JSONSchema specification approach, and each schema file must also be valid JSON for parsing. 
 
-The overall schema is defined at the top level with a "$id" value naming the overall schema, as well as a "$version" keyword with value 1. Then either a packet definition or an anyOf list is specified Each layer is wrapped in curly braces unless specified otherwise. 
+The overall schema is defined at the top level with a "id" value naming the overall schema, as well as a "version" keyword with value 1 (For this version of the scheme). Then either a packet definition or an anyOf list is specified Each layer is wrapped in curly braces unless specified otherwise. 
 
 Schemas are bidirectional, such that the parsing library can utilize the same schema file to both encode and decode data. In this way utilization of the schema is simplified, by allowing both the OBC and the ground segment to seamlessly transfer key-value pairs directly with highly efficient encoding.
 
