@@ -6,7 +6,7 @@
 //! The Aim of this project is to provide a satellite communication standard that is modern and easier to write and develop from than XML based systems. More can be read (here)[] 
 
 use core::panic;
-use std::{collections::{HashMap, VecDeque}, str::from_utf8};
+use std::{collections::{HashMap, VecDeque}, fmt, str::from_utf8};
 use serde_json::{self, Map, Number, Value};
 
 /// Main interface of the library, created from JSONSchema files
@@ -26,8 +26,24 @@ pub enum MultiLayerSchema{
     ///Final Schema for transmission 
     Bottom(Map<String,Value>)
 }
+///Error Enumeration for library errors
+#[derive(Debug)]
+pub enum Error{
+    ///Error when parsing a schema file
+    ParseError,
+    ///Error when encoding or decoding data, string param is the keyword where the error occured
+    EncodeError(String),
+}
 
-fn parse_multilayer_schema(schema:Value)->MultiLayerSchema{
+impl fmt::Display for Error{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self{
+            Error::ParseError => write!(f,"Error when parsing file"),
+            Error::EncodeError(point) => write!(f,"Error when parsing {}", point.to_string()),
+        }
+    }
+}
+fn parse_multilayer_schema(schema:Value)->Result<MultiLayerSchema,Error>{
     //if value has oneOf -> not at bottom level. Parse each element recursively 
     //if value does not have one Of -> at bottom level, return map
     let starting_schema = schema.as_object().expect("Not an object");
@@ -35,34 +51,44 @@ fn parse_multilayer_schema(schema:Value)->MultiLayerSchema{
         Some(x) => {
             let mut output:HashMap<u8,MultiLayerSchema>=Default::default();
             let subschemes = x.as_array().expect("Invalid formatting for oneOF");
-            let mut counter:u8 = 0;
             let mut lookup:HashMap<String,u8>=Default::default();
-            for i in subschemes{//is this order consistant
-                output.insert(counter,parse_multilayer_schema(i.clone()));
+            for (counter, i) in (0_u8..).zip(subschemes.iter()){//is this order consistant
+                output.insert(counter,parse_multilayer_schema(i.clone())?);
                 lookup.insert(i.get("id").expect("Could not find ID").as_str().unwrap().to_string(),counter);
-                counter +=1;
             }
-            MultiLayerSchema::Layer { schemes: Box::new(output), lookup }
+            Ok(MultiLayerSchema::Layer { schemes: Box::new(output), lookup })
         },//Recursion
         None => {
-            return MultiLayerSchema::Bottom(starting_schema.clone())
+            Ok(MultiLayerSchema::Bottom(starting_schema.clone()))
         },//Found the bottom
     }
 }
-fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits_carry:Vec<u8>)->(MultiLayerSchema,Value,Vec<u8>){
+fn find_schema_encoding(scheme:&MultiLayerSchema,message:&Value,mut message_bits_carry:Vec<u8>)->Result<(MultiLayerSchema,Value,Vec<u8>),Error>{
     match scheme{
         MultiLayerSchema::Layer { schemes, lookup } => {
             if message.as_object().unwrap().keys().count() >1{
-                panic!("More than one top level schema defined in the message")
+                return Err(Error::ParseError)
             }
-            let signal =  message.as_object().unwrap().keys().next().expect("Couldn't find ID");
-            let scheme_id = lookup.get(signal).expect("id not recognized - String");
-            let sub_scheme = schemes.get(scheme_id).expect("id not recognized - usize");
-            message_bits_carry.push(*scheme_id);
-            return find_schema_encoding(sub_scheme, message.get(signal).unwrap(),message_bits_carry)//Should never panic, since 
+            let signal:&String;
+            match message.as_object().unwrap().keys().next(){
+                Some(flag) => signal=flag,
+                None => return Err(Error::ParseError),
+            }
+            let scheme_id:&u8;
+            match lookup.get(signal){
+                Some(id) => scheme_id=id,
+                None => return Err(Error::EncodeError(signal.to_string())),
+            }
+            match schemes.get(scheme_id){
+                Some(id) => {message_bits_carry.push(*scheme_id);
+                    find_schema_encoding(id, message.get(signal).unwrap(),message_bits_carry)
+                },
+                None => return Err(Error::EncodeError(signal.to_string())),
+            }
+            //Should never panic, since 
         },
         MultiLayerSchema::Bottom(_) => {
-            return (scheme.clone(),message.clone(),message_bits_carry)
+            Ok((scheme.clone(),message.clone(),message_bits_carry))
         },
     }
 }
@@ -76,10 +102,10 @@ fn find_schema_decoding(scheme:&MultiLayerSchema,message:&mut VecDeque<u8>,mut m
                     message_values_carry.push_back(key.clone())
                 }
             }
-            return find_schema_decoding(sub_scheme, message,message_values_carry)
+            find_schema_decoding(sub_scheme, message,message_values_carry)
         },
         MultiLayerSchema::Bottom(_) => {
-            return (scheme.clone(),message.clone(),message_values_carry)
+            (scheme.clone(),message.clone(),message_values_carry)
         },
     }
 }
@@ -99,42 +125,48 @@ impl MessageConfig{
     }
     fn order(properties:&Map<String,Value>)->Vec<Value>{
         let order = properties.get("required").expect("Could not find 'required' property, is the scheme correct?").as_array().expect("Required property must be an array");
-        if order.len() == 0{
+        if order.is_empty(){
             if properties.get("properties").expect("could not find the properties field").as_object().unwrap().is_empty(){
                 return Vec::new()
             }
             panic!("Required field is empty: Must contain all relevent fields in the proper order.")
         }
 
-        return order.clone()
+        order.clone()
     }
     fn scheme(properties:&Map<String,Value>)->Value{
         let scheme = properties.get("properties").expect("Could not find Properties field").clone();
-        return scheme
+        scheme
     }
 }
 impl Parser{
     ///Creates a new parser from a serde_json value  
-    pub fn new(scheme: Value)->Parser{
-        let schema = parse_multilayer_schema(scheme);
-        Parser {schema}  
+    pub fn new(scheme: Value)->Result<Parser,Error>{
+        let schema = parse_multilayer_schema(scheme)?;
+        Ok(Parser {schema})  
     }
 
     ///Creates a new parser from a String schema
-    pub fn new_from_string(scheme:String)->Parser{
-        let json:Value = serde_json::from_str(&scheme).expect("String is not valid JSON");
-        Self::new(json)
+    pub fn new_from_string(scheme:String)->Result<Parser,Error>{
+        let data: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&scheme);
+        match data{
+            Ok(value) => Self::new(value),
+            Err(_) => Err(Error::ParseError),
+        }
     }
 
     ///Encode a given JSON message into vec[u8]
-    pub fn encode_from_string(&self,message:&str)->Vec<u8>{
-        let data:serde_json::Value = serde_json::from_str(message).expect("Could not deserialize message, is it valid JSON?");//Will be validated upstream, temp warning
-        self.encode(data)
+    pub fn encode_from_string(&self,message:&str)->Result<Vec<u8>,Error>{
+        let data: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(message);
+        match data{
+            Ok(value) => self.encode(value),
+            Err(_) => Err(Error::ParseError),
+        }
     }
     ///Encode a given JSON message into vec[u8]
-    pub fn encode(&self,message:Value)->Vec<u8>{
+    pub fn encode(&self,message:Value)->Result<Vec<u8>,Error>{
         //Can assume this is correctly packed
-        let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![]);
+        let (message_conf,pre_processed_message,signal_bit) = find_schema_encoding(&self.schema, &message, vec![])?;
         let message_config = MessageConfig::new(message_conf);
         let mut processed_data =vec![signal_bit];
         for i in &message_config.order{
@@ -143,7 +175,7 @@ impl Parser{
             let mut output:Vec<u8>;
             match current_config.get("enum"){
                 Some(x) => {
-                    let data:u8 =x.as_array().unwrap().into_iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").try_into().expect("More than 256 enum options");
+                    let data:u8 =x.as_array().unwrap().iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").try_into().expect("More than 256 enum options");
                     output = data.to_le_bytes().to_vec();
                 },
                 None => {//not enum
@@ -161,10 +193,8 @@ impl Parser{
                                 if 2_i64.pow(len-1)<current_data{
                                     panic!("Provided value is bigger than allowed in schema")
                                 }
-                            } else {
-                                if 2_i64.pow(len)<current_data{
-                                    panic!("Provided value is bigger than allowed in schema")
-                                }
+                            } else if 2_i64.pow(len)<current_data{
+                                panic!("Provided value is bigger than allowed in schema")
                             }
                                 //Then its signed
                             output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
@@ -185,11 +215,11 @@ impl Parser{
                             output = current_data.to_le_bytes().to_vec();
                             println!("{:?}",output);
                         },
-                        "base64" => {
+                        "blob" => {
                             let mut carry = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
                             let length = carry.len();
                             if length > 256{
-                                panic!("String is more than 256 bytes long")
+                                panic!("Blob is more than 256 bytes long")
                             }
                             output = vec![length as u8];
                             output.append(&mut carry);
@@ -200,15 +230,15 @@ impl Parser{
             }
             processed_data.push(output)
         }
-    processed_data.into_iter().flatten().collect()//still need to add pre-append bits
+    Ok(processed_data.into_iter().flatten().collect())//still need to add pre-append bits
     }
     ///Decode vec[u8] to a string (Formatted as JSON)
-    pub fn decode_to_string(&self,message:Vec<u8>)->String{
-        let data = self.decode(message);
-        return serde_json::to_string(&data).unwrap();
+    pub fn decode_to_string(&self,message:Vec<u8>)->Result<String,Error>{
+        let data = self.decode(message)?;
+        Ok(serde_json::to_string(&data).unwrap())
     }
     ///Decode vec[u8] to a serde_json::value Object
-    pub fn decode(&self,message: Vec<u8>,)->Value{
+    pub fn decode(&self,message: Vec<u8>,)->Result<Value,Error>{
         let mut working_message:VecDeque<u8> = message.into();
         let mut output = serde_json::Map::new();
         let (message_conf,mut working_message,mut signal_values) = find_schema_decoding(&self.schema,&mut working_message,vec![].into());
@@ -252,19 +282,25 @@ impl Parser{
                             let working_output:String = from_utf8(&data).expect("Can't convert to UTF8").to_string();
                             output.insert(i.as_str().unwrap().to_string(),Value::String(working_output)); 
                         },
+                        "blob" => {
+                            let length  = working_message.pop_front().unwrap();
+                            let data:Vec<u8> = working_message.drain(0..length as usize).collect();
+                            let working_output:String = from_utf8(&data).expect("Can't convert to UTF8").to_string();
+                            output.insert(i.as_str().unwrap().to_string(),Value::String(working_output)); 
+                        },
                         _=> panic!("Not implemented for decoding")
                     }
                 },
             }
         }
-        Value::from(Self::create_output_package(output,&mut signal_values))
+        Ok(Value::from(Self::create_output_package(output,&mut signal_values)))
     }    
     fn create_output_package(message:Map<String,Value>,frontmatter:&mut VecDeque<String>)->Map<String, Value>{
-        if frontmatter.len() > 0{
-            let header = frontmatter.pop_front().expect("Somehow if failed and tried to pop empty");
+        if !frontmatter.is_empty(){
+            let header = frontmatter.pop_front().expect("Somehow it failed and tried to pop empty");
             let mut data = Map::new();
             data.insert(header, Value::from(Self::create_output_package(message, frontmatter)));
-            return data
+            data
         }
         else{
             message
@@ -300,31 +336,31 @@ mod tests{
     use super::*;
     #[test]
     fn test_loading(){
-        Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema file"));
+        Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema file")).unwrap();
         assert!(true)
     }
     #[test]
     fn test_encoding(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema")).unwrap();
         let message = fs::read_to_string(r"src/test_files/Incoming_data.json").expect("Could not read incoming data file");
-        let encoded_message = parser.encode_from_string(&message);
+        let encoded_message = parser.encode_from_string(&message).unwrap();
         let expected_message = [0, 50, 4, 84, 101, 115, 116, 1];
         assert_eq!(encoded_message,expected_message)
     }
     #[test]
     fn test_decoding(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema")).unwrap();
         let message = [0, 50, 4, 84, 101, 115, 116, 1];
-        let decoded_message = parser.decode(message.to_vec());
+        let decoded_message = parser.decode(message.to_vec()).unwrap();
         let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
     }
     #[test]
     fn test_encode_then_decode(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/scheme.json").expect("Could not read schema")).unwrap();
         let message = fs::read_to_string(r"src/test_files/Incoming_data.json").expect("Could not read incoming data file");
-        let encoded = parser.encode_from_string(&message);
-        let decoded:Value = parser.decode(encoded);
+        let encoded = parser.encode_from_string(&message).unwrap();
+        let decoded:Value = parser.decode(encoded).unwrap();
         let target:Value = serde_json::from_str(&message).unwrap();
         for i in decoded.as_object().unwrap().keys(){
             assert_eq!(decoded.as_object().unwrap().get(i),target.as_object().unwrap().get(i))   
@@ -332,73 +368,73 @@ mod tests{
     }
     #[test]
     fn test_multi_schema_encode(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message = fs::read_to_string(r"src/test_files/Incoming_data_multi.json").expect("Could not read incoming data file");
-        let encoded_message = parser.encode_from_string(&message);
-        let expected_message = [0, 0, 50, 4, 84, 101, 115, 116, 1];
+        let encoded_message = parser.encode_from_string(&message).unwrap();
+        let expected_message = [0, 0, 50, 4, 84, 101, 115, 116, 1, 0, 0, 0, 0, 0, 0, 43, 64];
         assert_eq!(encoded_message,expected_message)
     }
     #[test]
     fn test_two_message_multi_schema_encode(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message1 = fs::read_to_string(r"src/test_files/Incoming_data_multi.json").expect("Could not read incoming data file");
-        let encoded_message1 = parser.encode_from_string(&message1);
-        let expected_message1 = [0, 0, 50, 4, 84, 101, 115, 116, 1];
+        let encoded_message1 = parser.encode_from_string(&message1).unwrap();
+        let expected_message1 = [0, 0, 50, 4, 84, 101, 115, 116, 1, 0, 0, 0, 0, 0, 0, 43, 64];
         let message2 = fs::read_to_string(r"src/test_files/test_command_ack.json").expect("Could not read incoming data file");
-        let encoded_message2 = parser.encode_from_string(&message2);
+        let encoded_message2 = parser.encode_from_string(&message2).unwrap();
         let expected_message2 = [1, 5];
         assert_eq!(encoded_message1,expected_message1);
         assert_eq!(encoded_message2,expected_message2)
     }
     #[test]
     fn test_multi_schema_decode(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
-        let message = [0, 0, 50, 4, 84, 101, 115, 116, 1];
-        let decoded_message = parser.decode(message.to_vec());
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
+        let message = [0, 0, 50, 4, 84, 101, 115, 116, 1, 0, 0, 0, 0, 0, 0, 43, 64];
+        let decoded_message = parser.decode(message.to_vec()).unwrap();
         let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_multi.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
     }
     #[test]
     fn test_two_message_multi_schema_decode(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
-        let message1 = [0, 0, 50, 4, 84, 101, 115, 116, 1];
-        let decoded_message1 = parser.decode(message1.to_vec());
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
+        let message1 = [0, 0, 50, 4, 84, 101, 115, 116, 1, 0, 0, 0, 0, 0, 0, 43, 64];
+        let decoded_message1 = parser.decode(message1.to_vec()).unwrap();
         let expected_message1:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_multi.json").expect("Could not read incoming data file")).unwrap();
         let message2 = [1, 5];
-        let decoded_message2 = parser.decode(message2.to_vec());
+        let decoded_message2 = parser.decode(message2.to_vec()).unwrap();
         let expected_message2:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/test_command_ack.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message1,expected_message1);
         assert_eq!(decoded_message2,expected_message2)
     }
     #[test]
     fn test_multi_schema_encode_two_layer(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message = fs::read_to_string(r"src/test_files/Incoming_data_multi_bottom_layer.json").expect("Could not read incoming data file");
-        let encoded_message = parser.encode_from_string(&message);
+        let encoded_message = parser.encode_from_string(&message).unwrap();
         let expected_message = [2,0,1,1];
         assert_eq!(encoded_message,expected_message)
     }
     #[test]
     fn test_multi_schema_decode_two_layer(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message = [2,0,1,1];
-        let decoded_message = parser.decode(message.to_vec());
+        let decoded_message = parser.decode(message.to_vec()).unwrap();
         let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_multi_bottom_layer.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
     }
     #[test]
     fn test_multi_schema_encode_singleton(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message = fs::read_to_string(r"src/test_files/Incoming_data_singleton.json").expect("Could not read incoming data file");
-        let encoded_message = parser.encode_from_string(&message);
+        let encoded_message = parser.encode_from_string(&message).unwrap();
         let expected_message = [3];
         assert_eq!(encoded_message,expected_message)
     }
     #[test]
     fn test_multi_schema_decode_singleton(){
-        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema"));
+        let parser = Parser::new_from_string(fs::read_to_string(r"src/test_files/multi_schema_test.json").expect("Could not read schema")).unwrap();
         let message = [3];
-        let decoded_message = parser.decode(message.to_vec());
+        let decoded_message = parser.decode(message.to_vec()).unwrap();
         let expected_message:Value = serde_json::from_str(&fs::read_to_string(r"src/test_files/Incoming_data_singleton.json").expect("Could not read incoming data file")).unwrap();
         assert_eq!(decoded_message.as_object().unwrap(),expected_message.as_object().unwrap())
     }
