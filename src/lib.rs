@@ -204,7 +204,7 @@ impl MessageConfig{
         }
         let scheme: Value;
         match properties.get("properties"){
-            Some(data) => scheme = data.clone(),
+            Some(data) => scheme = data.clone(),//Maybe put properties validation here
             None => return Err(Error::EncodeError{error_msg:"Missing properties Field".to_string(),error_pos:Some(id.to_string())}),
         }
         Ok(scheme)
@@ -246,56 +246,82 @@ impl Parser{
             let mut output:Vec<u8>;
             match current_config.get("enum"){
                 Some(x) => {
-                    let data:u8 =x.as_array().unwrap().iter().position(|x| x == unprocessed_data).expect("Could not get index of enum value").try_into().expect("More than 256 enum options");
+                    let data:u8;
+                    match x.as_array().unwrap().iter().position(|x| x == unprocessed_data){
+                        Some(data2) => data =data2.try_into().expect("More than 256 enum options"),
+                        None => return Err(Error::EncodeError { error_msg: "Could not get index of provided enum value".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                    };
                     output = data.to_le_bytes().to_vec();
                 },
                 None => {//not enum
                     match current_config.get("type").unwrap().as_str().unwrap(){
                         "boolean" => {
-                            match unprocessed_data.as_bool().unwrap(){
-                                true => output = vec![1],
-                                false => output = vec![0],
+                            match unprocessed_data.as_bool(){
+                                Some(data) => {
+                                    match data{
+                                        true => output = vec![1],
+                                        false => output = vec![0],
+                                    }
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "Did not provide a valid boolean".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
                             }
                         },
                         "integer" => {
                             let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bits
-                            let current_data  = unprocessed_data.as_i64().expect("Provided value is not an integer");
+                            //should I check the schema before now and assume its valid at this point? Might be more trivial to just check it once and keep these errors to the message
+                            let current_data ; 
+                            match unprocessed_data.as_i64(){
+                                Some(data) => current_data = data,
+                                None => return Err(Error::EncodeError { error_msg: "Provided value cannot be deserialized as an integer".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
+                            }
                             if current_data < 0{
                                 if 2_i64.pow(len-1)<current_data{
-                                    panic!("Provided value is bigger than allowed in schema")
+                                    return Err(Error::EncodeError { error_msg: "Provided value is bigger than maximum".to_string(), error_pos: Some(i.as_str().unwrap().to_string())})
                                 }
                             } else if 2_i64.pow(len)<current_data{
-                                panic!("Provided value is bigger than allowed in schema")
+                                return Err(Error::EncodeError { error_msg: "Provided value is bigger than maximum".to_string(), error_pos: Some(i.as_str().unwrap().to_string())})
                             }
                                 //Then its signed
                             output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
                             println!("int {:?}",output);
                         },
                         "string" => {
-                            let mut carry = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let mut carry: Vec<u8>;
+                            match unprocessed_data.as_str(){
+                                Some(data) => carry = data.as_bytes().to_vec(),
+                                None => return Err(Error::EncodeError { error_msg: "Could not serialize data as a string".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
+                            }
                             let length = carry.len();
                             if length > 256{
-                                panic!("String is more than 256 bytes long")
+                                return Err(Error::EncodeError { error_msg: "Provided string is more than 255 bytes long".to_string(), error_pos: Some(i.as_str().unwrap().to_string())})
                             }
                             output = vec![length as u8];
                             output.append(&mut carry);
                         },
                         "number" => {
                             //Always a 64byte signed float
-                            let current_data:f64  = unprocessed_data.as_f64().expect("Provided value is not an integer");
+                            let current_data:f64;
+                            match unprocessed_data.as_f64(){
+                                Some(x) => current_data = x,
+                                None => return Err(Error::EncodeError { error_msg: "Data could not be serialized as a float".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
+                            }
                             output = current_data.to_le_bytes().to_vec();
                             println!("{:?}",output);
                         },
                         "blob" => {
-                            let mut carry = unprocessed_data.as_str().expect("Value is not encoded as a string").as_bytes().to_vec();
+                            let mut carry: Vec<u8>;
+                            match unprocessed_data.as_str(){
+                                Some(data) => carry = data.as_bytes().to_vec(),
+                                None => return Err(Error::EncodeError { error_msg: "Could not serialize data as a string".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
+                            }
                             let length = carry.len();
                             if length > 256{
-                                panic!("Blob is more than 256 bytes long")
+                                return Err(Error::EncodeError { error_msg: "Provided blob is more than 255 bytes long".to_string(), error_pos: Some(i.as_str().unwrap().to_string())})
                             }
                             output = vec![length as u8];
                             output.append(&mut carry);
                         },
-                        _ => panic!("Cannot parse")
+                        _ => return Err(Error::EncodeError { error_msg: "Invalid property keyword".to_string(), error_pos: Some(i.as_str().unwrap().to_string())})
                     }
                 },
             }
@@ -333,6 +359,7 @@ impl Parser{
                         },
                         "integer" => {
                             let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
+                            //Again, will this be checked at another point?
                             let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
                             data.reverse();//is this needed
                             while data.len() <8{
