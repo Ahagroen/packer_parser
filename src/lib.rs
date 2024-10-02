@@ -31,7 +31,7 @@ pub enum MultiLayerSchema{
 pub enum Error{
     ///Error when parsing a schema file
     ParseError(String),
-    ///Error when encoding or decoding data, string param is the keyword where the error occured
+    ///Error when encoding or decoding data
     EncodeError{
         ///Description of Error
         error_msg:String,
@@ -267,7 +267,17 @@ impl Parser{
                             }
                         },
                         "integer" => {
-                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bits
+                            let len:u32;
+                            match current_config.get("size"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => match u32::try_from(data2){
+                                        Ok(x) => len = x,
+                                        Err(_) => return Err(Error::EncodeError { error_msg: "Size value is more than 32 bits long".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                    },
+                                    None => return Err(Error::EncodeError { error_msg: "Size field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "Integer parameters must have a size field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
                             //should I check the schema before now and assume its valid at this point? Might be more trivial to just check it once and keep these errors to the message
                             let current_data ; 
                             match unprocessed_data.as_i64(){
@@ -283,7 +293,6 @@ impl Parser{
                             }
                                 //Then its signed
                             output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
-                            println!("int {:?}",output);
                         },
                         "string" => {
                             let mut carry: Vec<u8>;
@@ -299,14 +308,45 @@ impl Parser{
                             output.append(&mut carry);
                         },
                         "number" => {
-                            //Always a 64byte signed float
+                            //64byte signed float
                             let current_data:f64;
                             match unprocessed_data.as_f64(){
                                 Some(x) => current_data = x,
                                 None => return Err(Error::EncodeError { error_msg: "Data could not be serialized as a float".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
                             }
                             output = current_data.to_le_bytes().to_vec();
-                            println!("{:?}",output);
+                        },
+                        "decimal" => {
+                            let len:u32;
+                            match current_config.get("size"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => match u32::try_from(data2){
+                                        Ok(x) => len = x,
+                                        Err(_) => return Err(Error::EncodeError { error_msg: "Size value is more than 32 bits long".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                    },
+                                    None => return Err(Error::EncodeError { error_msg: "Size field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "decimal parameters must have a size field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
+                            let multiplyer:u64;
+                            match current_config.get("factor"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => multiplyer = data2,
+                                    None => return Err(Error::EncodeError { error_msg: "factor field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "decimal parameters must have a size field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
+                            let current_data:f64;
+                            match unprocessed_data.as_f64(){
+                                Some(x) => current_data = x,
+                                None => return Err(Error::EncodeError { error_msg: "Data could not be serialized as a float".to_string(), error_pos: Some(i.as_str().unwrap().to_string())}),
+                            }
+                            let processed_data = current_data*(10.*multiplyer as f64);
+                            let post_processed_data = processed_data.floor() as u64;
+                            if post_processed_data > len.into(){
+                                return Err(Error::EncodeError { error_msg: "Provided value is larger than spec".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) })
+                            }
+                            output = current_data.to_le_bytes().split_at((len/8) as usize).0.to_vec();
                         },
                         "blob" => {
                             let mut carry: Vec<u8>;
@@ -357,8 +397,24 @@ impl Parser{
                                 output.insert(i.as_str().unwrap().to_string(),Value::Bool(false));
                             }
                         },
+                        "number" => {
+                            //always f64
+                            let data:Vec<u8> = working_message.drain(0..8).collect();
+                            let working_output:f64 = f64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
+                            output.insert(i.as_str().unwrap().to_string(),Value::Number(Number::from_f64(working_output).expect("Couldn't convert to JSON")));
+                        },
                         "integer" => {
-                            let len:u32 = current_config.get("size").expect("Integer fields must have a declared size").as_u64().expect("Size Must be a number").try_into().expect("Size must be smaller than 32 bits");//Size in bytes
+                            let len:u32;
+                            match current_config.get("size"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => match u32::try_from(data2){
+                                        Ok(x) => len = x,
+                                        Err(_) => return Err(Error::EncodeError { error_msg: "Size value is more than 32 bits long".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                    },
+                                    None => return Err(Error::EncodeError { error_msg: "Size field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "Integer parameters must have a size field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
                             //Again, will this be checked at another point?
                             let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
                             data.reverse();//is this needed
@@ -368,17 +424,41 @@ impl Parser{
                             let working_output:u64 = u64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
                             output.insert(i.as_str().unwrap().to_string(),Value::Number(working_output.into()));
                         },
-                        "number" => {
-                            //always f64
-                            let data:Vec<u8> = working_message.drain(0..8).collect();
-                            let working_output:f64 = f64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
-                            output.insert(i.as_str().unwrap().to_string(),Value::Number(Number::from_f64(working_output).expect("Couldn't convert to JSON")));
-                        },
                         "string" => {
                             let length  = working_message.pop_front().unwrap();
                             let data:Vec<u8> = working_message.drain(0..length as usize).collect();
                             let working_output:String = from_utf8(&data).expect("Can't convert to UTF8").to_string();
                             output.insert(i.as_str().unwrap().to_string(),Value::String(working_output)); 
+                        },
+                        "decimal" => {
+                            let len:u32;
+                            match current_config.get("size"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => match u32::try_from(data2){
+                                        Ok(x) => len = x,
+                                        Err(_) => return Err(Error::EncodeError { error_msg: "Size value is more than 32 bits long".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                    },
+                                    None => return Err(Error::EncodeError { error_msg: "Size field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "Decimal parameters must have a size field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
+                            let multiplyer:u64;
+                            match current_config.get("factor"){
+                                Some(data) => match data.as_u64(){
+                                    Some(data2) => multiplyer = data2,
+                                    None => return Err(Error::EncodeError { error_msg: "factor field must contain a number".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                                },
+                                None => return Err(Error::EncodeError { error_msg: "decimal parameters must have a factor field".to_string(), error_pos: Some(i.as_str().unwrap().to_string()) }),
+                            }//Size in bits
+                            //Again, will this be checked at another point?
+                            let mut data:Vec<u8> = working_message.drain(0..len as usize/8).collect();
+                            data.reverse();//is this needed
+                            while data.len() <8{
+                                data.push(0)
+                            }
+                            let working_output:u64 = u64::from_le_bytes(data.as_slice().try_into().expect("Incorrect Length"));
+                            let post_processed = working_output as f64/(10*multiplyer) as f64;
+                            output.insert(i.as_str().unwrap().to_string(),Value::Number(Number::from_f64(post_processed).expect("Couldn't convert to JSON")));
                         },
                         "blob" => {
                             let length  = working_message.pop_front().unwrap();

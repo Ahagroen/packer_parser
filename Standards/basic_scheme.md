@@ -57,6 +57,16 @@ A double precision floating point number (64 bits). Support for variable length 
     1. "type" keyword - "number"
     2. "description" keyword (optional) - Describes the field 
 
+#### Decimal
+A manually defined fixed-point number, with spec-defined exponent. parameter is encoded as the value * 10^factor then rounded down. Decoding is completed in the same way. This parameter is best used for floating point values with known precision, such as battery voltages or current pointing angles 
+- Defined as a name paremeter, then:
+    1. "type" keyword - "decimal"
+    2. "size" parameter - max size in bits 
+        - NOTE: Must compute to a round number of bytes (and thus be divisable by 8)
+        - NOTE: All bytes are allocated in the packet regardless of passed value
+    3. "factor" parameter - exponent to process the value with
+    2. "description" keyword (optional) - Describes the field 
+
 #### String
 Defined as a variable length string. Maximum permitted length is 256 bytes of UTF-8 encoding. The length is encoded within the final bytestream, so only allocates the required length of the passed message + 1 byte. Planned update for V1.1: if the string field is specified last in the list provided to the required keyword, the length byte is not included and the string is assumed to use the remaining packet space (256 byte limit still applies)
 - Defined as a named parameter, then:
