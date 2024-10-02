@@ -15,7 +15,7 @@ Specifies a set of potential packet definitions. Defined as an array of options.
 ## Packet Definition
 Specifies a final packet definition. All fields within this definition are required to be included in the sent packet
 - Declaration:
-    1. "id" keyword with string identifer
+    1. "id" keyword with string identifier
     2. "required" keyword with array containing the _keyword name_ of each parameter in the packet
         - Specifies the order of parameters for encoding
     3. "type" keyword with value "object"
@@ -25,7 +25,7 @@ Note that for a command with no parameters (for example starting a pass), the re
 ## Parameters
 - Each parameter must be wrapped by the properties keyword, and its name must be included in the required parameter for it to be sent. Optional parameters are not supported
 - Each property is defined by declaring the name of the field, then setting the value to the name keyword as an object
-- A paremeter can either be a type - in which case the value is encoded and sent, or an enumerated option - in which case the value is compared to the list of values and the _index_ is sent. 
+- A parameter can either be a type - in which case the value is encoded and sent, or an enumerated option - in which case the value is compared to the list of values and the _index_ is sent. 
 
 ### Enums
 Enums provide space efficient methods of sending common data such as satellite state or deployment state of a component.
@@ -47,28 +47,28 @@ An Integer of variable size. Currently only support for round byte sizing but bi
 - Defined as a named parameter, then:
     1. "type" keyword - "integer"
     2. "size" parameter - max size in bits
-        - NOTE: Must compute to a round number of bytes (and thus be divisable by 8)
+        - NOTE: Must compute to a round number of bytes (and thus be devisable by 8)
         - NOTE: All bytes are allocated in the packet regardless of passed value
     3. "description" keyword (optional) - Describes the field 
 
 #### Number
 A double precision floating point number (64 bits). Support for variable length floats is a long term goal, but not currently planned
-- Defined as a name paremeter, then:
+- Defined as a name parameter, then:
     1. "type" keyword - "number"
     2. "description" keyword (optional) - Describes the field 
 
 #### Decimal
 A manually defined fixed-point number, with spec-defined exponent. parameter is encoded as the value * 10^factor then rounded down. Decoding is completed in the same way. This parameter is best used for floating point values with known precision, such as battery voltages or current pointing angles 
-- Defined as a name paremeter, then:
+- Defined as a name parameter, then:
     1. "type" keyword - "decimal"
     2. "size" parameter - max size in bits 
-        - NOTE: Must compute to a round number of bytes (and thus be divisable by 8)
+        - NOTE: Must compute to a round number of bytes (and thus be devisable by 8)
         - NOTE: All bytes are allocated in the packet regardless of passed value
     3. "factor" parameter - exponent to process the value with
     2. "description" keyword (optional) - Describes the field 
 
 #### String
-Defined as a variable length string. Maximum permitted length is 256 bytes of UTF-8 encoding. The length is encoded within the final bytestream, so only allocates the required length of the passed message + 1 byte. Planned update for V1.1: if the string field is specified last in the list provided to the required keyword, the length byte is not included and the string is assumed to use the remaining packet space (256 byte limit still applies)
+Defined as a variable length string. Maximum permitted length is 256 bytes of UTF-8 encoding. The length is encoded within the final byte stream, so only allocates the required length of the passed message + 1 byte. Planned update for V1.1: if the string field is specified last in the list provided to the required keyword, the length byte is not included and the string is assumed to use the remaining packet space (256 byte limit still applies)
 - Defined as a named parameter, then:
     1. "type" keyword - "string"
     2. "description" keyword (optional) - Describes the field 
